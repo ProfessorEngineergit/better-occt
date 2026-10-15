@@ -149,6 +149,7 @@ EMSCRIPTEN_BINDINGS(occt_wasm) {
 
         // evolution
         .function("tweakFacesWithHistory", &OcctKernel::tweakFacesWithHistory)
+        .function("defeatureWithHistory", &OcctKernel::defeatureWithHistory)
         .function("translateWithHistory", &OcctKernel::translateWithHistory)
         .function("fuseWithHistory", &OcctKernel::fuseWithHistory)
         .function("cutWithHistory", &OcctKernel::cutWithHistory)

@@ -839,6 +839,44 @@ return evo;",
         return_type: ReturnType::EvolutionData,
     },
     MethodSpec {
+        name: "defeatureWithHistory",
+        kind: MethodKind::CustomBody,
+        params: &[
+            FacadeParam::ShapeId("solidId"), FacadeParam::VectorShapeIds("faceIds"),
+            FacadeParam::VectorInt("inputFaceHashes"), FacadeParam::Int("hashUpperBound"),
+        ],
+        occt_class: "",
+        ctor_args: "",
+        // Removes faces (a chamfer, a rounding, a boss) and lets their neighbours grow over the
+        // gap, with the history buildEvolution reads: what a tweak needs when a face it moves past
+        // would otherwise have to shrink to nothing.
+        setup_code: "\
+const auto& solid = get(solidId);
+BRepAlgoAPI_Defeaturing maker;
+maker.SetShape(solid);
+for (uint32_t fid : faceIds) {
+    maker.AddFaceToRemove(get(fid));
+}
+maker.SetToFillHistory(true);
+maker.Build();
+if (!maker.IsDone() || maker.HasErrors()) {
+    throw std::runtime_error(\"defeatureWithHistory: the faces around them cannot close the gap\");
+}
+TopoDS_Shape shape = unwrapSingletonSolid(maker.Shape());
+const std::string problem = shape.IsNull() ? std::string(\"no shape\") : BezierTweakProblem(shape);
+if (!problem.empty()) {
+    throw std::runtime_error(\"defeatureWithHistory: the result is not valid (\" + problem + \")\");
+}
+BatchScope result(*this, 1);
+uint32_t resultId = result.add(shape);
+EvolutionData evo = buildEvolution(maker, resultId, solid, inputFaceHashes, hashUpperBound);
+result.take();
+return evo;",
+        includes: &["BRepAlgoAPI_Defeaturing.hxx", "bezier_tweak.h"],
+        category: "evolution",
+        return_type: ReturnType::EvolutionData,
+    },
+    MethodSpec {
         name: "reverseShape",
         kind: MethodKind::CustomBody,
         params: &[FacadeParam::ShapeId("id")],

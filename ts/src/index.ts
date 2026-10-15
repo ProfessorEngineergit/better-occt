@@ -2009,6 +2009,22 @@ export class OcctKernel {
         );
     }
 
+    /**
+     * Remove faces (a chamfer, a rounding, a boss) and let the faces around them grow over the gap,
+     * with the face history of the other `...WithHistory` operations.
+     */
+    defeatureWithHistory(solid: ShapeHandle, faces: ShapeHandle[], inputFaceHashes: number[], hashUpperBound: number): EvolutionData {
+        return wrap("defeatureWithHistory", () =>
+            this.#withU32(faces, (faceVec) =>
+                this.#withI32(inputFaceHashes, (hashes) =>
+                    this.#extractEvolution(
+                        this.#raw.defeatureWithHistory(solid, faceVec, hashes, hashUpperBound),
+                    ),
+                ),
+            ),
+        );
+    }
+
     shellWithHistory(solid: ShapeHandle, faces: ShapeHandle[], thickness: number, tolerance: number, inputFaceHashes: number[], hashUpperBound: number): EvolutionData {
         return wrap("shellWithHistory", () =>
             this.#withU32(faces, (faceVec) =>

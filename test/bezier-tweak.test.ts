@@ -234,4 +234,18 @@ describe("tweak: faces move and the solid follows", () => {
         // The walls grow by 3 straight up all round: the footprint, unchanged, times 3.
         expect(kernel.getVolume(evo.result)).toBeCloseTo(before + 100 * 3, 4);
     });
+
+    it("removes a chamfer, the faces beside it growing over the gap, with history", () => {
+        const box = kernel.makeBox(10, 10, 10);
+        const edge = kernel.getSubShapes(box, "edge").find((e: number) => {
+            const c = kernel.getLinearCenterOfMass(e);
+            return Math.abs(c.y - 10) < 1e-6 && Math.abs(c.z - 10) < 1e-6;
+        });
+        const chamfered = kernel.chamfer(box, [edge], 2);
+        const slope = faceAt(chamfered, (c) => Math.abs(c.y + c.z - 18) < 1e-6 && c.y > 8.5);
+        const evo = kernel.defeatureWithHistory(chamfered, [slope], hashes(chamfered), BOUND);
+        expect(kernel.isValid(evo.result)).toBe(true);
+        expect(kernel.getVolume(evo.result)).toBeCloseTo(1000, 6);
+        expect(evo.deleted).toContain(kernel.hashCode(slope, BOUND));
+    });
 });

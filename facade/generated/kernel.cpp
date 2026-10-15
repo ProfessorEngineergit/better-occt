@@ -1101,6 +1101,34 @@ EvolutionData OcctKernel::tweakFacesWithHistory(uint32_t solidId, std::vector<ui
     }
 }
 
+EvolutionData OcctKernel::defeatureWithHistory(uint32_t solidId, std::vector<uint32_t> faceIds, std::vector<int> inputFaceHashes, int hashUpperBound) {
+    try {
+        const auto& solid = get(solidId);
+        BRepAlgoAPI_Defeaturing maker;
+        maker.SetShape(solid);
+        for (uint32_t fid : faceIds) {
+            maker.AddFaceToRemove(get(fid));
+        }
+        maker.SetToFillHistory(true);
+        maker.Build();
+        if (!maker.IsDone() || maker.HasErrors()) {
+            throw std::runtime_error("defeatureWithHistory: the faces around them cannot close the gap");
+        }
+        TopoDS_Shape shape = unwrapSingletonSolid(maker.Shape());
+        const std::string problem = shape.IsNull() ? std::string("no shape") : BezierTweakProblem(shape);
+        if (!problem.empty()) {
+            throw std::runtime_error("defeatureWithHistory: the result is not valid (" + problem + ")");
+        }
+        BatchScope result(*this, 1);
+        uint32_t resultId = result.add(shape);
+        EvolutionData evo = buildEvolution(maker, resultId, solid, inputFaceHashes, hashUpperBound);
+        result.take();
+        return evo;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("defeatureWithHistory: ") + e.what());
+    }
+}
+
 EvolutionData OcctKernel::translateWithHistory(uint32_t id, double dx, double dy, double dz, std::vector<int> inputFaceHashes, int hashUpperBound) {
     try {
         const auto& shape = get(id);
