@@ -785,6 +785,60 @@ return store(maker.Shape());",
         return_type: ReturnType::ShapeId,
     },
     MethodSpec {
+        name: "tweakFacesWithHistory",
+        kind: MethodKind::CustomBody,
+        params: &[
+            FacadeParam::ShapeId("solidId"), FacadeParam::VectorShapeIds("faceIds"),
+            FacadeParam::VectorDouble("motions"), FacadeParam::VectorDouble("offsets"),
+            FacadeParam::VectorInt("inputFaceHashes"), FacadeParam::Int("hashUpperBound"),
+        ],
+        occt_class: "",
+        ctor_args: "",
+        // Moves faces and lets the solid follow: each face's surface is carried by a rigid
+        // motion (row-major 3x4, twelve numbers per face) and then offset along its outward
+        // normal; edges and vertices are found again where the new surfaces meet
+        // (facade/src/bezier_tweak.cpp). A result the full check rejects is refused rather than
+        // repaired, since a repair would desync the history buildEvolution reads.
+        setup_code: "\
+const auto& solid = get(solidId);
+if (motions.size() != faceIds.size() * 12 || offsets.size() != faceIds.size()) {
+    throw std::runtime_error(\"tweakFacesWithHistory: one motion and one offset per face\");
+}
+std::vector<BezierFaceMove> moves;
+for (size_t i = 0; i < faceIds.size(); ++i) {
+    BezierFaceMove move;
+    move.face = get(faceIds[i]);
+    const double* m = &motions[i * 12];
+    move.motion.SetValues(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]);
+    move.offset = offsets[i];
+    moves.push_back(move);
+}
+std::unique_ptr<BezierTweak> made;
+try {
+    made = std::make_unique<BezierTweak>(solid, moves);
+} catch (const Standard_Failure& failure) {
+    // OCCT often throws without a message; its type is what says what went wrong.
+    throw std::runtime_error(std::string(\"tweakFacesWithHistory: \") + failure.ExceptionType() + \" \" + failure.what());
+}
+BezierTweak& maker = *made;
+if (!maker.IsDone()) {
+    throw std::runtime_error(\"tweakFacesWithHistory: operation failed\");
+}
+TopoDS_Shape shape = unwrapSingletonSolid(maker.Shape());
+const std::string problem = shape.IsNull() ? std::string(\"no shape\") : BezierTweakProblem(shape);
+if (!problem.empty()) {
+    throw std::runtime_error(\"tweakFacesWithHistory: the faces around it cannot follow this move (\" + problem + \")\");
+}
+BatchScope result(*this, 1);
+uint32_t resultId = result.add(shape);
+EvolutionData evo = buildEvolution(maker, resultId, solid, inputFaceHashes, hashUpperBound);
+result.take();
+return evo;",
+        includes: &["bezier_tweak.h", "TopoDS.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
+        category: "evolution",
+        return_type: ReturnType::EvolutionData,
+    },
+    MethodSpec {
         name: "reverseShape",
         kind: MethodKind::CustomBody,
         params: &[FacadeParam::ShapeId("id")],

@@ -56,6 +56,7 @@ pub(crate) struct GeneratedFuncs {
     fn_draft: TypedFunc<(u32, u32, f64, f64, f64, f64), u32>,
     fn_thicken: TypedFunc<(u32, f64, f64), u32>,
     fn_defeature: TypedFunc<(u32, i32, i32, f64), u32>,
+    fn_tweak_faces_with_history: TypedFunc<(u32, i32, i32, i32, i32, i32, i32, i32, i32, i32), i32>,
     fn_reverse_shape: TypedFunc<(u32,), u32>,
     fn_simplify: TypedFunc<(u32,), u32>,
     fn_fillet_variable: TypedFunc<(u32, u32, f64, f64), u32>,
@@ -295,6 +296,8 @@ impl GeneratedFuncs {
             fn_draft: instance.get_typed_func(&mut store, "occt_draft")?,
             fn_thicken: instance.get_typed_func(&mut store, "occt_thicken")?,
             fn_defeature: instance.get_typed_func(&mut store, "occt_defeature")?,
+            fn_tweak_faces_with_history: instance
+                .get_typed_func(&mut store, "occt_tweak_faces_with_history")?,
             fn_reverse_shape: instance.get_typed_func(&mut store, "occt_reverse_shape")?,
             fn_simplify: instance.get_typed_func(&mut store, "occt_simplify")?,
             fn_fillet_variable: instance.get_typed_func(&mut store, "occt_fillet_variable")?,
@@ -1085,6 +1088,77 @@ impl crate::kernel::OcctKernel {
             return Err(self.read_last_error("defeature"));
         }
         Ok(ShapeHandle(result))
+    }
+
+    pub fn tweak_faces_with_history(
+        &mut self,
+        solid_id: ShapeHandle,
+        face_ids: &[ShapeHandle],
+        motions: &[f64],
+        offsets: &[f64],
+        input_face_hashes: &[i32],
+        hash_upper_bound: i32,
+    ) -> OcctResult<EvolutionData> {
+        let face_ids_bytes: Vec<u8> = face_ids.iter().flat_map(|h| h.0.to_le_bytes()).collect();
+        let face_ids_ptr = self.write_bytes(&face_ids_bytes)?;
+        let face_ids_len = face_ids.len() as u32;
+        let motions_bytes: Vec<u8> = motions.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let motions_ptr = match self.write_bytes(&motions_bytes) {
+            Ok(ptr) => ptr,
+            Err(e) => {
+                let _ = self.free_bytes(face_ids_ptr);
+                return Err(e);
+            }
+        };
+        let motions_len = motions.len() as u32;
+        let offsets_bytes: Vec<u8> = offsets.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let offsets_ptr = match self.write_bytes(&offsets_bytes) {
+            Ok(ptr) => ptr,
+            Err(e) => {
+                let _ = self.free_bytes(face_ids_ptr);
+                let _ = self.free_bytes(motions_ptr);
+                return Err(e);
+            }
+        };
+        let offsets_len = offsets.len() as u32;
+        let input_face_hashes_bytes: Vec<u8> = input_face_hashes
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let input_face_hashes_ptr = match self.write_bytes(&input_face_hashes_bytes) {
+            Ok(ptr) => ptr,
+            Err(e) => {
+                let _ = self.free_bytes(face_ids_ptr);
+                let _ = self.free_bytes(motions_ptr);
+                let _ = self.free_bytes(offsets_ptr);
+                return Err(e);
+            }
+        };
+        let input_face_hashes_len = input_face_hashes.len() as u32;
+        let status = self.generated.fn_tweak_faces_with_history.call(
+            &mut self.store,
+            (
+                solid_id.0,
+                face_ids_ptr as i32,
+                face_ids_len as i32,
+                motions_ptr as i32,
+                motions_len as i32,
+                offsets_ptr as i32,
+                offsets_len as i32,
+                input_face_hashes_ptr as i32,
+                input_face_hashes_len as i32,
+                hash_upper_bound,
+            ),
+        );
+        self.free_bytes(face_ids_ptr)?;
+        self.free_bytes(motions_ptr)?;
+        self.free_bytes(offsets_ptr)?;
+        self.free_bytes(input_face_hashes_ptr)?;
+        let status = status?;
+        if status < 0 {
+            return Err(self.read_last_error("tweak_faces_with_history"));
+        }
+        self.read_evolution_result()
     }
 
     pub fn reverse_shape(&mut self, id: ShapeHandle) -> OcctResult<ShapeHandle> {

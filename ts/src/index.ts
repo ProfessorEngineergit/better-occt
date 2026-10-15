@@ -1986,6 +1986,29 @@ export class OcctKernel {
         );
     }
 
+    /**
+     * Move faces of a solid and let the rest of it follow, as direct modellers do: each face's
+     * surface is carried by a rigid motion (`motions`, twelve numbers per face: a row-major 3x4
+     * matrix) and then offset along its outward normal (`offsets`, one per face); every edge and
+     * vertex touching a moved face is found again where the new surfaces meet. Topology is kept;
+     * a move that has no such solution throws.
+     */
+    tweakFacesWithHistory(solid: ShapeHandle, faces: ShapeHandle[], motions: number[], offsets: number[], inputFaceHashes: number[], hashUpperBound: number): EvolutionData {
+        return wrap("tweakFacesWithHistory", () =>
+            this.#withU32(faces, (faceVec) =>
+                this.#withF64(motions, (motionVec) =>
+                    this.#withF64(offsets, (offsetVec) =>
+                        this.#withI32(inputFaceHashes, (hashes) =>
+                            this.#extractEvolution(
+                                this.#raw.tweakFacesWithHistory(solid, faceVec, motionVec, offsetVec, hashes, hashUpperBound),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        );
+    }
+
     shellWithHistory(solid: ShapeHandle, faces: ShapeHandle[], thickness: number, tolerance: number, inputFaceHashes: number[], hashUpperBound: number): EvolutionData {
         return wrap("shellWithHistory", () =>
             this.#withU32(faces, (faceVec) =>

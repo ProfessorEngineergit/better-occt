@@ -149,6 +149,7 @@
 #include <XCAFDoc_ColorType.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
+#include <bezier_tweak.h>
 #include <cmath>
 #include <cstdlib>
 #include <gp_Ax1.hxx>
@@ -1054,6 +1055,285 @@ uint32_t OcctKernel::draftPrism(uint32_t shapeId, double dx, double dy, double d
         return store(drafter.Shape());
     } catch (const Standard_Failure& e) {
         throw std::runtime_error(std::string("draftPrism: ") + e.what());
+    }
+}
+
+// === evolution ===
+
+EvolutionData OcctKernel::tweakFacesWithHistory(uint32_t solidId, std::vector<uint32_t> faceIds, std::vector<double> motions, std::vector<double> offsets, std::vector<int> inputFaceHashes, int hashUpperBound) {
+    try {
+        const auto& solid = get(solidId);
+        if (motions.size() != faceIds.size() * 12 || offsets.size() != faceIds.size()) {
+            throw std::runtime_error("tweakFacesWithHistory: one motion and one offset per face");
+        }
+        std::vector<BezierFaceMove> moves;
+        for (size_t i = 0; i < faceIds.size(); ++i) {
+            BezierFaceMove move;
+            move.face = get(faceIds[i]);
+            const double* m = &motions[i * 12];
+            move.motion.SetValues(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]);
+            move.offset = offsets[i];
+            moves.push_back(move);
+        }
+        std::unique_ptr<BezierTweak> made;
+        try {
+            made = std::make_unique<BezierTweak>(solid, moves);
+        } catch (const Standard_Failure& failure) {
+            // OCCT often throws without a message; its type is what says what went wrong.
+            throw std::runtime_error(std::string("tweakFacesWithHistory: ") + failure.ExceptionType() + " " + failure.what());
+        }
+        BezierTweak& maker = *made;
+        if (!maker.IsDone()) {
+            throw std::runtime_error("tweakFacesWithHistory: operation failed");
+        }
+        TopoDS_Shape shape = unwrapSingletonSolid(maker.Shape());
+        const std::string problem = shape.IsNull() ? std::string("no shape") : BezierTweakProblem(shape);
+        if (!problem.empty()) {
+            throw std::runtime_error("tweakFacesWithHistory: the faces around it cannot follow this move (" + problem + ")");
+        }
+        BatchScope result(*this, 1);
+        uint32_t resultId = result.add(shape);
+        EvolutionData evo = buildEvolution(maker, resultId, solid, inputFaceHashes, hashUpperBound);
+        result.take();
+        return evo;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("tweakFacesWithHistory: ") + e.what());
+    }
+}
+
+EvolutionData OcctKernel::translateWithHistory(uint32_t id, double dx, double dy, double dz, std::vector<int> inputFaceHashes, int hashUpperBound) {
+    try {
+        const auto& shape = get(id);
+        gp_Trsf trsf;
+        trsf.SetTranslation(gp_Vec(dx, dy, dz));
+        BRepBuilderAPI_Transform maker(shape, trsf, true);
+        uint32_t resultId = store(maker.Shape());
+        return buildEvolution(maker, resultId, shape, inputFaceHashes, hashUpperBound);
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("translateWithHistory: ") + e.what());
+    }
+}
+
+EvolutionData OcctKernel::fuseWithHistory(uint32_t a, uint32_t b, std::vector<int> inputFaceHashes, int hashUpperBound) {
+    try {
+        const auto& shapeA = get(a);
+        const auto& shapeB = get(b);
+        BRepAlgoAPI_Fuse op(shapeA, shapeB);
+        op.Build();
+        if (!op.IsDone() || op.HasErrors()) {
+            throw std::runtime_error("fuseWithHistory: operation failed");
+        }
+        uint32_t resultId = store(op.Shape());
+        
+        // Build evolution from both input shapes
+        EvolutionData evo = buildEvolution(op, resultId, shapeA, inputFaceHashes, hashUpperBound);
+        // Also check shapeB
+        EvolutionData evoB = buildEvolution(op, resultId, shapeB, inputFaceHashes, hashUpperBound);
+        // Merge B into A
+        evo.modified.insert(evo.modified.end(), evoB.modified.begin(), evoB.modified.end());
+        evo.generated.insert(evo.generated.end(), evoB.generated.begin(), evoB.generated.end());
+        evo.deleted.insert(evo.deleted.end(), evoB.deleted.begin(), evoB.deleted.end());
+        return evo;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("fuseWithHistory: ") + e.what());
+    }
+}
+
+EvolutionData OcctKernel::cutWithHistory(uint32_t a, uint32_t b, std::vector<int> inputFaceHashes, int hashUpperBound) {
+    try {
+        const auto& shapeA = get(a);
+        const auto& shapeB = get(b);
+        BRepAlgoAPI_Cut op(shapeA, shapeB);
+        op.Build();
+        if (!op.IsDone() || op.HasErrors()) {
+            throw std::runtime_error("cutWithHistory: operation failed");
+        }
+        uint32_t resultId = store(op.Shape());
+        
+        EvolutionData evo = buildEvolution(op, resultId, shapeA, inputFaceHashes, hashUpperBound);
+        EvolutionData evoB = buildEvolution(op, resultId, shapeB, inputFaceHashes, hashUpperBound);
+        evo.modified.insert(evo.modified.end(), evoB.modified.begin(), evoB.modified.end());
+        evo.generated.insert(evo.generated.end(), evoB.generated.begin(), evoB.generated.end());
+        evo.deleted.insert(evo.deleted.end(), evoB.deleted.begin(), evoB.deleted.end());
+        return evo;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("cutWithHistory: ") + e.what());
+    }
+}
+
+EvolutionData OcctKernel::filletWithHistory(uint32_t solidId, std::vector<uint32_t> edgeIds, double radius, std::vector<int> inputFaceHashes, int hashUpperBound) {
+    try {
+        const auto& solid = get(solidId);
+        BRepFilletAPI_MakeFillet maker(solid);
+        for (uint32_t eid : edgeIds) {
+            maker.Add(radius, TopoDS::Edge(get(eid)));
+        }
+        maker.Build();
+        if (!maker.IsDone()) {
+            throw std::runtime_error("filletWithHistory: operation failed");
+        }
+        BatchScope result(*this, 1);
+        uint32_t resultId = result.add(validateFilletResult(unwrapSingletonSolid(maker.Shape()), "filletWithHistory", false));
+        EvolutionData evo = buildEvolution(maker, resultId, solid, inputFaceHashes, hashUpperBound);
+        result.take();
+        return evo;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("filletWithHistory: ") + e.what());
+    }
+}
+
+EvolutionData OcctKernel::rotateWithHistory(uint32_t id, double px, double py, double pz, double dx, double dy, double dz, double angle, std::vector<int> inputFaceHashes, int hashUpperBound) {
+    try {
+        const auto& shape = get(id);
+        gp_Trsf trsf;
+        trsf.SetRotation(gp_Ax1(gp_Pnt(px, py, pz), gp_Dir(dx, dy, dz)), angle);
+        BRepBuilderAPI_Transform maker(shape, trsf, true);
+        uint32_t resultId = store(maker.Shape());
+        return buildEvolution(maker, resultId, shape, inputFaceHashes, hashUpperBound);
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("rotateWithHistory: ") + e.what());
+    }
+}
+
+EvolutionData OcctKernel::mirrorWithHistory(uint32_t id, double px, double py, double pz, double nx, double ny, double nz, std::vector<int> inputFaceHashes, int hashUpperBound) {
+    try {
+        const auto& shape = get(id);
+        gp_Trsf trsf;
+        trsf.SetMirror(gp_Ax2(gp_Pnt(px, py, pz), gp_Dir(nx, ny, nz)));
+        BRepBuilderAPI_Transform maker(shape, trsf, true);
+        uint32_t resultId = store(maker.Shape());
+        return buildEvolution(maker, resultId, shape, inputFaceHashes, hashUpperBound);
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("mirrorWithHistory: ") + e.what());
+    }
+}
+
+EvolutionData OcctKernel::scaleWithHistory(uint32_t id, double cx, double cy, double cz, double factor, std::vector<int> inputFaceHashes, int hashUpperBound) {
+    try {
+        const auto& shape = get(id);
+        gp_Trsf trsf;
+        trsf.SetScale(gp_Pnt(cx, cy, cz), factor);
+        BRepBuilderAPI_Transform maker(shape, trsf, true);
+        uint32_t resultId = store(maker.Shape());
+        return buildEvolution(maker, resultId, shape, inputFaceHashes, hashUpperBound);
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("scaleWithHistory: ") + e.what());
+    }
+}
+
+EvolutionData OcctKernel::intersectWithHistory(uint32_t a, uint32_t b, std::vector<int> inputFaceHashes, int hashUpperBound) {
+    try {
+        const auto& shapeA = get(a);
+        const auto& shapeB = get(b);
+        BRepAlgoAPI_Common op(shapeA, shapeB);
+        op.Build();
+        if (!op.IsDone() || op.HasErrors()) {
+            throw std::runtime_error("intersectWithHistory: operation failed");
+        }
+        uint32_t resultId = store(op.Shape());
+        EvolutionData evo = buildEvolution(op, resultId, shapeA, inputFaceHashes, hashUpperBound);
+        EvolutionData evoB = buildEvolution(op, resultId, shapeB, inputFaceHashes, hashUpperBound);
+        evo.modified.insert(evo.modified.end(), evoB.modified.begin(), evoB.modified.end());
+        evo.generated.insert(evo.generated.end(), evoB.generated.begin(), evoB.generated.end());
+        evo.deleted.insert(evo.deleted.end(), evoB.deleted.begin(), evoB.deleted.end());
+        return evo;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("intersectWithHistory: ") + e.what());
+    }
+}
+
+EvolutionData OcctKernel::chamferWithHistory(uint32_t solidId, std::vector<uint32_t> edgeIds, double distance, std::vector<int> inputFaceHashes, int hashUpperBound) {
+    try {
+        const auto& solid = get(solidId);
+        BRepFilletAPI_MakeChamfer maker(solid);
+        for (uint32_t eid : edgeIds) {
+            maker.Add(distance, TopoDS::Edge(get(eid)));
+        }
+        maker.Build();
+        if (!maker.IsDone()) {
+            throw std::runtime_error("chamferWithHistory: operation failed");
+        }
+        BatchScope result(*this, 1);
+        uint32_t resultId = result.add(validateFilletResult(unwrapSingletonSolid(maker.Shape()), "chamferWithHistory", false));
+        EvolutionData evo = buildEvolution(maker, resultId, solid, inputFaceHashes, hashUpperBound);
+        result.take();
+        return evo;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("chamferWithHistory: ") + e.what());
+    }
+}
+
+EvolutionData OcctKernel::shellWithHistory(uint32_t solidId, std::vector<uint32_t> faceIds, double thickness, double tolerance, std::vector<int> inputFaceHashes, int hashUpperBound) {
+    try {
+        const auto& solid = get(solidId);
+        NCollection_List<TopoDS_Shape> facesToRemove;
+        for (uint32_t fid : faceIds) {
+            facesToRemove.Append(get(fid));
+        }
+        BRepOffsetAPI_MakeThickSolid maker;
+        maker.MakeThickSolidByJoin(solid, facesToRemove, -thickness, tolerance);
+        maker.Build();
+        if (!maker.IsDone()) {
+            throw std::runtime_error("shellWithHistory: operation failed");
+        }
+        BatchScope result(*this, 1);
+        uint32_t resultId = result.add(maker.Shape());
+        EvolutionData evo = buildEvolution(maker, resultId, solid, inputFaceHashes, hashUpperBound);
+        result.take();
+        return evo;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("shellWithHistory: ") + e.what());
+    }
+}
+
+EvolutionData OcctKernel::offsetWithHistory(uint32_t solidId, double distance, double tolerance, std::vector<int> inputFaceHashes, int hashUpperBound) {
+    try {
+        const auto& solid = get(solidId);
+        BRepOffsetAPI_MakeOffsetShape maker;
+        maker.PerformByJoin(solid, distance, tolerance);
+        maker.Build();
+        if (!maker.IsDone()) {
+            throw std::runtime_error("offsetWithHistory: operation failed");
+        }
+        uint32_t resultId = store(maker.Shape());
+        return buildEvolution(maker, resultId, solid, inputFaceHashes, hashUpperBound);
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("offsetWithHistory: ") + e.what());
+    }
+}
+
+EvolutionData OcctKernel::thickenWithHistory(uint32_t shapeId, double thickness, double tolerance, std::vector<int> inputFaceHashes, int hashUpperBound) {
+    try {
+        const auto& shape = get(shapeId);
+        
+        // For faces/shells: use BRepOffset_MakeOffset (MakeThickSolid only works for solid
+        // hollowing)
+        if (shape.ShapeType() == TopAbs_FACE || shape.ShapeType() == TopAbs_SHELL) {
+            BRepOffset_MakeOffset offsetMaker;
+            offsetMaker.Initialize(shape, thickness, tolerance, BRepOffset_Skin, false, false,
+                                   GeomAbs_Arc, true);
+            offsetMaker.MakeOffsetShape();
+            if (!offsetMaker.IsDone()) {
+                throw std::runtime_error("thickenWithHistory: offset operation failed");
+            }
+            uint32_t resultId = store(offsetMaker.Shape());
+            // No evolution tracking for BRepOffset_MakeOffset (different API)
+            EvolutionData result{};
+            result.resultId = resultId;
+            return result;
+        }
+        
+        NCollection_List<TopoDS_Shape> emptyList;
+        BRepOffsetAPI_MakeThickSolid maker;
+        maker.MakeThickSolidByJoin(shape, emptyList, thickness, tolerance);
+        maker.Build();
+        if (!maker.IsDone()) {
+            throw std::runtime_error("thickenWithHistory: operation failed");
+        }
+        uint32_t resultId = store(maker.Shape());
+        return buildEvolution(maker, resultId, shape, inputFaceHashes, hashUpperBound);
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("thickenWithHistory: ") + e.what());
     }
 }
 
@@ -3592,244 +3872,6 @@ uint32_t OcctKernel::importBrepBinary(const std::string& path) {
         return store(shape);
     } catch (const Standard_Failure& e) {
         throw std::runtime_error(std::string("importBrepBinary: ") + e.what());
-    }
-}
-
-// === evolution ===
-
-EvolutionData OcctKernel::translateWithHistory(uint32_t id, double dx, double dy, double dz, std::vector<int> inputFaceHashes, int hashUpperBound) {
-    try {
-        const auto& shape = get(id);
-        gp_Trsf trsf;
-        trsf.SetTranslation(gp_Vec(dx, dy, dz));
-        BRepBuilderAPI_Transform maker(shape, trsf, true);
-        uint32_t resultId = store(maker.Shape());
-        return buildEvolution(maker, resultId, shape, inputFaceHashes, hashUpperBound);
-    } catch (const Standard_Failure& e) {
-        throw std::runtime_error(std::string("translateWithHistory: ") + e.what());
-    }
-}
-
-EvolutionData OcctKernel::fuseWithHistory(uint32_t a, uint32_t b, std::vector<int> inputFaceHashes, int hashUpperBound) {
-    try {
-        const auto& shapeA = get(a);
-        const auto& shapeB = get(b);
-        BRepAlgoAPI_Fuse op(shapeA, shapeB);
-        op.Build();
-        if (!op.IsDone() || op.HasErrors()) {
-            throw std::runtime_error("fuseWithHistory: operation failed");
-        }
-        uint32_t resultId = store(op.Shape());
-        
-        // Build evolution from both input shapes
-        EvolutionData evo = buildEvolution(op, resultId, shapeA, inputFaceHashes, hashUpperBound);
-        // Also check shapeB
-        EvolutionData evoB = buildEvolution(op, resultId, shapeB, inputFaceHashes, hashUpperBound);
-        // Merge B into A
-        evo.modified.insert(evo.modified.end(), evoB.modified.begin(), evoB.modified.end());
-        evo.generated.insert(evo.generated.end(), evoB.generated.begin(), evoB.generated.end());
-        evo.deleted.insert(evo.deleted.end(), evoB.deleted.begin(), evoB.deleted.end());
-        return evo;
-    } catch (const Standard_Failure& e) {
-        throw std::runtime_error(std::string("fuseWithHistory: ") + e.what());
-    }
-}
-
-EvolutionData OcctKernel::cutWithHistory(uint32_t a, uint32_t b, std::vector<int> inputFaceHashes, int hashUpperBound) {
-    try {
-        const auto& shapeA = get(a);
-        const auto& shapeB = get(b);
-        BRepAlgoAPI_Cut op(shapeA, shapeB);
-        op.Build();
-        if (!op.IsDone() || op.HasErrors()) {
-            throw std::runtime_error("cutWithHistory: operation failed");
-        }
-        uint32_t resultId = store(op.Shape());
-        
-        EvolutionData evo = buildEvolution(op, resultId, shapeA, inputFaceHashes, hashUpperBound);
-        EvolutionData evoB = buildEvolution(op, resultId, shapeB, inputFaceHashes, hashUpperBound);
-        evo.modified.insert(evo.modified.end(), evoB.modified.begin(), evoB.modified.end());
-        evo.generated.insert(evo.generated.end(), evoB.generated.begin(), evoB.generated.end());
-        evo.deleted.insert(evo.deleted.end(), evoB.deleted.begin(), evoB.deleted.end());
-        return evo;
-    } catch (const Standard_Failure& e) {
-        throw std::runtime_error(std::string("cutWithHistory: ") + e.what());
-    }
-}
-
-EvolutionData OcctKernel::filletWithHistory(uint32_t solidId, std::vector<uint32_t> edgeIds, double radius, std::vector<int> inputFaceHashes, int hashUpperBound) {
-    try {
-        const auto& solid = get(solidId);
-        BRepFilletAPI_MakeFillet maker(solid);
-        for (uint32_t eid : edgeIds) {
-            maker.Add(radius, TopoDS::Edge(get(eid)));
-        }
-        maker.Build();
-        if (!maker.IsDone()) {
-            throw std::runtime_error("filletWithHistory: operation failed");
-        }
-        BatchScope result(*this, 1);
-        uint32_t resultId = result.add(validateFilletResult(unwrapSingletonSolid(maker.Shape()), "filletWithHistory", false));
-        EvolutionData evo = buildEvolution(maker, resultId, solid, inputFaceHashes, hashUpperBound);
-        result.take();
-        return evo;
-    } catch (const Standard_Failure& e) {
-        throw std::runtime_error(std::string("filletWithHistory: ") + e.what());
-    }
-}
-
-EvolutionData OcctKernel::rotateWithHistory(uint32_t id, double px, double py, double pz, double dx, double dy, double dz, double angle, std::vector<int> inputFaceHashes, int hashUpperBound) {
-    try {
-        const auto& shape = get(id);
-        gp_Trsf trsf;
-        trsf.SetRotation(gp_Ax1(gp_Pnt(px, py, pz), gp_Dir(dx, dy, dz)), angle);
-        BRepBuilderAPI_Transform maker(shape, trsf, true);
-        uint32_t resultId = store(maker.Shape());
-        return buildEvolution(maker, resultId, shape, inputFaceHashes, hashUpperBound);
-    } catch (const Standard_Failure& e) {
-        throw std::runtime_error(std::string("rotateWithHistory: ") + e.what());
-    }
-}
-
-EvolutionData OcctKernel::mirrorWithHistory(uint32_t id, double px, double py, double pz, double nx, double ny, double nz, std::vector<int> inputFaceHashes, int hashUpperBound) {
-    try {
-        const auto& shape = get(id);
-        gp_Trsf trsf;
-        trsf.SetMirror(gp_Ax2(gp_Pnt(px, py, pz), gp_Dir(nx, ny, nz)));
-        BRepBuilderAPI_Transform maker(shape, trsf, true);
-        uint32_t resultId = store(maker.Shape());
-        return buildEvolution(maker, resultId, shape, inputFaceHashes, hashUpperBound);
-    } catch (const Standard_Failure& e) {
-        throw std::runtime_error(std::string("mirrorWithHistory: ") + e.what());
-    }
-}
-
-EvolutionData OcctKernel::scaleWithHistory(uint32_t id, double cx, double cy, double cz, double factor, std::vector<int> inputFaceHashes, int hashUpperBound) {
-    try {
-        const auto& shape = get(id);
-        gp_Trsf trsf;
-        trsf.SetScale(gp_Pnt(cx, cy, cz), factor);
-        BRepBuilderAPI_Transform maker(shape, trsf, true);
-        uint32_t resultId = store(maker.Shape());
-        return buildEvolution(maker, resultId, shape, inputFaceHashes, hashUpperBound);
-    } catch (const Standard_Failure& e) {
-        throw std::runtime_error(std::string("scaleWithHistory: ") + e.what());
-    }
-}
-
-EvolutionData OcctKernel::intersectWithHistory(uint32_t a, uint32_t b, std::vector<int> inputFaceHashes, int hashUpperBound) {
-    try {
-        const auto& shapeA = get(a);
-        const auto& shapeB = get(b);
-        BRepAlgoAPI_Common op(shapeA, shapeB);
-        op.Build();
-        if (!op.IsDone() || op.HasErrors()) {
-            throw std::runtime_error("intersectWithHistory: operation failed");
-        }
-        uint32_t resultId = store(op.Shape());
-        EvolutionData evo = buildEvolution(op, resultId, shapeA, inputFaceHashes, hashUpperBound);
-        EvolutionData evoB = buildEvolution(op, resultId, shapeB, inputFaceHashes, hashUpperBound);
-        evo.modified.insert(evo.modified.end(), evoB.modified.begin(), evoB.modified.end());
-        evo.generated.insert(evo.generated.end(), evoB.generated.begin(), evoB.generated.end());
-        evo.deleted.insert(evo.deleted.end(), evoB.deleted.begin(), evoB.deleted.end());
-        return evo;
-    } catch (const Standard_Failure& e) {
-        throw std::runtime_error(std::string("intersectWithHistory: ") + e.what());
-    }
-}
-
-EvolutionData OcctKernel::chamferWithHistory(uint32_t solidId, std::vector<uint32_t> edgeIds, double distance, std::vector<int> inputFaceHashes, int hashUpperBound) {
-    try {
-        const auto& solid = get(solidId);
-        BRepFilletAPI_MakeChamfer maker(solid);
-        for (uint32_t eid : edgeIds) {
-            maker.Add(distance, TopoDS::Edge(get(eid)));
-        }
-        maker.Build();
-        if (!maker.IsDone()) {
-            throw std::runtime_error("chamferWithHistory: operation failed");
-        }
-        BatchScope result(*this, 1);
-        uint32_t resultId = result.add(validateFilletResult(unwrapSingletonSolid(maker.Shape()), "chamferWithHistory", false));
-        EvolutionData evo = buildEvolution(maker, resultId, solid, inputFaceHashes, hashUpperBound);
-        result.take();
-        return evo;
-    } catch (const Standard_Failure& e) {
-        throw std::runtime_error(std::string("chamferWithHistory: ") + e.what());
-    }
-}
-
-EvolutionData OcctKernel::shellWithHistory(uint32_t solidId, std::vector<uint32_t> faceIds, double thickness, double tolerance, std::vector<int> inputFaceHashes, int hashUpperBound) {
-    try {
-        const auto& solid = get(solidId);
-        NCollection_List<TopoDS_Shape> facesToRemove;
-        for (uint32_t fid : faceIds) {
-            facesToRemove.Append(get(fid));
-        }
-        BRepOffsetAPI_MakeThickSolid maker;
-        maker.MakeThickSolidByJoin(solid, facesToRemove, -thickness, tolerance);
-        maker.Build();
-        if (!maker.IsDone()) {
-            throw std::runtime_error("shellWithHistory: operation failed");
-        }
-        BatchScope result(*this, 1);
-        uint32_t resultId = result.add(maker.Shape());
-        EvolutionData evo = buildEvolution(maker, resultId, solid, inputFaceHashes, hashUpperBound);
-        result.take();
-        return evo;
-    } catch (const Standard_Failure& e) {
-        throw std::runtime_error(std::string("shellWithHistory: ") + e.what());
-    }
-}
-
-EvolutionData OcctKernel::offsetWithHistory(uint32_t solidId, double distance, double tolerance, std::vector<int> inputFaceHashes, int hashUpperBound) {
-    try {
-        const auto& solid = get(solidId);
-        BRepOffsetAPI_MakeOffsetShape maker;
-        maker.PerformByJoin(solid, distance, tolerance);
-        maker.Build();
-        if (!maker.IsDone()) {
-            throw std::runtime_error("offsetWithHistory: operation failed");
-        }
-        uint32_t resultId = store(maker.Shape());
-        return buildEvolution(maker, resultId, solid, inputFaceHashes, hashUpperBound);
-    } catch (const Standard_Failure& e) {
-        throw std::runtime_error(std::string("offsetWithHistory: ") + e.what());
-    }
-}
-
-EvolutionData OcctKernel::thickenWithHistory(uint32_t shapeId, double thickness, double tolerance, std::vector<int> inputFaceHashes, int hashUpperBound) {
-    try {
-        const auto& shape = get(shapeId);
-        
-        // For faces/shells: use BRepOffset_MakeOffset (MakeThickSolid only works for solid
-        // hollowing)
-        if (shape.ShapeType() == TopAbs_FACE || shape.ShapeType() == TopAbs_SHELL) {
-            BRepOffset_MakeOffset offsetMaker;
-            offsetMaker.Initialize(shape, thickness, tolerance, BRepOffset_Skin, false, false,
-                                   GeomAbs_Arc, true);
-            offsetMaker.MakeOffsetShape();
-            if (!offsetMaker.IsDone()) {
-                throw std::runtime_error("thickenWithHistory: offset operation failed");
-            }
-            uint32_t resultId = store(offsetMaker.Shape());
-            // No evolution tracking for BRepOffset_MakeOffset (different API)
-            EvolutionData result{};
-            result.resultId = resultId;
-            return result;
-        }
-        
-        NCollection_List<TopoDS_Shape> emptyList;
-        BRepOffsetAPI_MakeThickSolid maker;
-        maker.MakeThickSolidByJoin(shape, emptyList, thickness, tolerance);
-        maker.Build();
-        if (!maker.IsDone()) {
-            throw std::runtime_error("thickenWithHistory: operation failed");
-        }
-        uint32_t resultId = store(maker.Shape());
-        return buildEvolution(maker, resultId, shape, inputFaceHashes, hashUpperBound);
-    } catch (const Standard_Failure& e) {
-        throw std::runtime_error(std::string("thickenWithHistory: ") + e.what());
     }
 }
 

@@ -147,6 +147,21 @@ EMSCRIPTEN_BINDINGS(occt_wasm) {
         .function("reverseSurfaceU", &OcctKernel::reverseSurfaceU)
         .function("draftPrism", &OcctKernel::draftPrism)
 
+        // evolution
+        .function("tweakFacesWithHistory", &OcctKernel::tweakFacesWithHistory)
+        .function("translateWithHistory", &OcctKernel::translateWithHistory)
+        .function("fuseWithHistory", &OcctKernel::fuseWithHistory)
+        .function("cutWithHistory", &OcctKernel::cutWithHistory)
+        .function("filletWithHistory", &OcctKernel::filletWithHistory)
+        .function("rotateWithHistory", &OcctKernel::rotateWithHistory)
+        .function("mirrorWithHistory", &OcctKernel::mirrorWithHistory)
+        .function("scaleWithHistory", &OcctKernel::scaleWithHistory)
+        .function("intersectWithHistory", &OcctKernel::intersectWithHistory)
+        .function("chamferWithHistory", &OcctKernel::chamferWithHistory)
+        .function("shellWithHistory", &OcctKernel::shellWithHistory)
+        .function("offsetWithHistory", &OcctKernel::offsetWithHistory)
+        .function("thickenWithHistory", &OcctKernel::thickenWithHistory)
+
         // transforms
         .function("translate", &OcctKernel::translate)
         .function("rotate", &OcctKernel::rotate)
@@ -294,20 +309,6 @@ EMSCRIPTEN_BINDINGS(occt_wasm) {
         .function("fromBREP", &OcctKernel::fromBREP)
         .function("exportBrepBinary", &OcctKernel::exportBrepBinary)
         .function("importBrepBinary", &OcctKernel::importBrepBinary)
-
-        // evolution
-        .function("translateWithHistory", &OcctKernel::translateWithHistory)
-        .function("fuseWithHistory", &OcctKernel::fuseWithHistory)
-        .function("cutWithHistory", &OcctKernel::cutWithHistory)
-        .function("filletWithHistory", &OcctKernel::filletWithHistory)
-        .function("rotateWithHistory", &OcctKernel::rotateWithHistory)
-        .function("mirrorWithHistory", &OcctKernel::mirrorWithHistory)
-        .function("scaleWithHistory", &OcctKernel::scaleWithHistory)
-        .function("intersectWithHistory", &OcctKernel::intersectWithHistory)
-        .function("chamferWithHistory", &OcctKernel::chamferWithHistory)
-        .function("shellWithHistory", &OcctKernel::shellWithHistory)
-        .function("offsetWithHistory", &OcctKernel::offsetWithHistory)
-        .function("thickenWithHistory", &OcctKernel::thickenWithHistory)
 
         // tessellate
         .function("tessellate", &OcctKernel::tessellate)
