@@ -90,6 +90,18 @@ gp_Pnt middleOf(const occ::handle<Geom_Curve>& curve, double first, double last)
     return curve->Value(0.5 * (first + last));
 }
 
+/// Whether a stretch of a curve lies on a surface, checked at a few points along it.
+bool liesOn(const occ::handle<Geom_Curve>& curve, double first, double last,
+            const occ::handle<Geom_Surface>& surface) {
+    for (int i = 0; i <= 4; ++i) {
+        const gp_Pnt point = curve->Value(first + (last - first) * i / 4.0);
+        GeomAPI_ProjectPointOnSurf onSurface(point, surface);
+        if (onSurface.NbPoints() == 0 || onSurface.LowerDistance() > Precision::Confusion())
+            return false;
+    }
+    return true;
+}
+
 /// The nearest whole number of periods from `from` to `to`, in parameter units.
 double periodsBetween(double from, double to, double period) {
     return std::round((to - from) / period) * period;
@@ -208,11 +220,31 @@ void BezierTweakModification::prepare(const TopoDS_Shape& shape) {
             myCurves.Bind(edge, carriedCurve);
             continue;
         }
+        // Carried by one face's motion, the edge may still lie on both faces: a face slid along
+        // the plane of its neighbour, or a rounding carried with the face it rounds while the
+        // wall it meets tangentially runs the way it moved. Kept as it is then. Two surfaces that
+        // touch along a line are where intersecting them is least reliable.
+        const TopoDS_Face& a = TopoDS::Face(faces.First());
+        const TopoDS_Face& b = TopoDS::Face(faces.Last());
+        occ::handle<Geom_Curve> kept;
+        for (const auto& face : {a, b}) {
+            const int m = moveOf(face);
+            if (m < 0 || !kept.IsNull())
+                continue;
+            auto carriedCurve = occ::handle<Geom_Curve>::DownCast(
+                old->Transformed(myMoves[static_cast<size_t>(m)].motion));
+            if (liesOn(carriedCurve, first, last, surfaceAfter(a)) &&
+                liesOn(carriedCurve, first, last, surfaceAfter(b)))
+                kept = carriedCurve;
+        }
+        if (!kept.IsNull()) {
+            myCurves.Bind(edge, kept);
+            continue;
+        }
         gp_Pnt p0;
         gp_Vec tangent;
         old->D1(0.5 * (first + last), p0, tangent);
-        myCurves.Bind(
-            edge, meetingOf(TopoDS::Face(faces.First()), TopoDS::Face(faces.Last()), p0, tangent));
+        myCurves.Bind(edge, meetingOf(a, b, p0, tangent));
     }
 
     // New vertices.

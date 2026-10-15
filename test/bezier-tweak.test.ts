@@ -214,4 +214,24 @@ describe("tweak: faces move and the solid follows", () => {
         expect(kernel.isValid(evo.result)).toBe(true);
         expect(kernel.getVolume(evo.result)).toBeCloseTo((100 - 4 * Math.PI) * 10, 6);
     });
+
+    it("pulls up a box whose top edges are rounded, the roundings carried with the top", () => {
+        const box = kernel.makeBox(10, 10, 10);
+        const rim = kernel.getSubShapes(box, "edge").filter((e: number) => {
+            const c = kernel.getLinearCenterOfMass(e);
+            return Math.abs(c.z - 10) < 1e-6;
+        });
+        const rounded = kernel.fillet(box, rim, 2);
+        const top = faceAt(rounded, (c) => Math.abs(c.z - 10) < 1e-6);
+        // The roundings tangent to the top move with it: the caller says so, as the app does.
+        const roundings = kernel
+            .getSubShapes(rounded, "face")
+            .filter((f: number) => kernel.surfaceType(f) !== "plane");
+        const faces = [top, ...roundings];
+        const before = kernel.getVolume(rounded);
+        const evo = tweak(rounded, faces, faces.map(() => shift(0, 0, 3)), faces.map(() => 0));
+        expect(kernel.isValid(evo.result)).toBe(true);
+        // The walls grow by 3 straight up all round: the footprint, unchanged, times 3.
+        expect(kernel.getVolume(evo.result)).toBeCloseTo(before + 100 * 3, 4);
+    });
 });
