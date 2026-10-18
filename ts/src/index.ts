@@ -1995,6 +1995,22 @@ export class OcctKernel {
     }
 
     /**
+     * A bevel with two legs on each edge: `distance1` on the first face beside it (as the solid
+     * lists its faces, the same on every rebuild), `distance2` on the other.
+     */
+    chamferTwoWithHistory(solid: ShapeHandle, edges: ShapeHandle[], distance1: number, distance2: number, inputFaceHashes: number[], hashUpperBound: number): EvolutionData {
+        return wrap("chamferTwoWithHistory", () =>
+            this.#withU32(edges, (edgeVec) =>
+                this.#withI32(inputFaceHashes, (hashes) =>
+                    this.#extractEvolution(
+                        this.#raw.chamferTwoWithHistory(solid, edgeVec, distance1, distance2, hashes, hashUpperBound),
+                    ),
+                ),
+            ),
+        );
+    }
+
+    /**
      * Move faces of a solid and let the rest of it follow, as direct modellers do: each face's
      * surface is carried by a rigid motion (`motions`, twelve numbers per face: a row-major 3x4
      * matrix) and then offset along its outward normal (`offsets`, one per face); every edge and

@@ -159,6 +159,7 @@ EMSCRIPTEN_BINDINGS(occt_wasm) {
         .function("scaleWithHistory", &OcctKernel::scaleWithHistory)
         .function("intersectWithHistory", &OcctKernel::intersectWithHistory)
         .function("chamferWithHistory", &OcctKernel::chamferWithHistory)
+        .function("chamferTwoWithHistory", &OcctKernel::chamferTwoWithHistory)
         .function("shellWithHistory", &OcctKernel::shellWithHistory)
         .function("offsetWithHistory", &OcctKernel::offsetWithHistory)
         .function("thickenWithHistory", &OcctKernel::thickenWithHistory)

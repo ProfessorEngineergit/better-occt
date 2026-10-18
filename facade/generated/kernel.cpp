@@ -1302,6 +1302,34 @@ EvolutionData OcctKernel::chamferWithHistory(uint32_t solidId, std::vector<uint3
     }
 }
 
+EvolutionData OcctKernel::chamferTwoWithHistory(uint32_t solidId, std::vector<uint32_t> edgeIds, double distance1, double distance2, std::vector<int> inputFaceHashes, int hashUpperBound) {
+    try {
+        const auto& solid = get(solidId);
+        NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> edgeFaces;
+        TopExp::MapShapesAndAncestors(solid, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+        BRepFilletAPI_MakeChamfer maker(solid);
+        for (uint32_t eid : edgeIds) {
+            const TopoDS_Edge& edge = TopoDS::Edge(get(eid));
+            const int index = edgeFaces.FindIndex(edge);
+            if (index == 0 || edgeFaces.FindFromIndex(index).IsEmpty()) {
+                throw std::runtime_error("chamferTwoWithHistory: an edge has no face beside it");
+            }
+            maker.Add(distance1, distance2, edge, TopoDS::Face(edgeFaces.FindFromIndex(index).First()));
+        }
+        maker.Build();
+        if (!maker.IsDone()) {
+            throw std::runtime_error("chamferTwoWithHistory: operation failed");
+        }
+        BatchScope result(*this, 1);
+        uint32_t resultId = result.add(validateFilletResult(unwrapSingletonSolid(maker.Shape()), "chamferTwoWithHistory", false));
+        EvolutionData evo = buildEvolution(maker, resultId, solid, inputFaceHashes, hashUpperBound);
+        result.take();
+        return evo;
+    } catch (const Standard_Failure& e) {
+        throw std::runtime_error(std::string("chamferTwoWithHistory: ") + e.what());
+    }
+}
+
 EvolutionData OcctKernel::shellWithHistory(uint32_t solidId, std::vector<uint32_t> faceIds, double thickness, double tolerance, std::vector<int> inputFaceHashes, int hashUpperBound) {
     try {
         const auto& solid = get(solidId);

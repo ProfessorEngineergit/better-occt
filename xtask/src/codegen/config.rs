@@ -4899,6 +4899,45 @@ return evo;",
         return_type: ReturnType::EvolutionData,
     },
     MethodSpec {
+        name: "chamferTwoWithHistory",
+        kind: MethodKind::CustomBody,
+        params: &[
+            FacadeParam::ShapeId("solidId"), FacadeParam::VectorShapeIds("edgeIds"),
+            FacadeParam::Double("distance1"), FacadeParam::Double("distance2"),
+            FacadeParam::VectorInt("inputFaceHashes"), FacadeParam::Int("hashUpperBound"),
+        ],
+        occt_class: "",
+        ctor_args: "",
+        // A bevel with two legs: `distance1` set back on the first face the solid lists beside each
+        // edge, `distance2` on the other. The first face is the same on every rebuild of the same
+        // shape, so the legs do not swap sides between rebuilds.
+        setup_code: "\
+const auto& solid = get(solidId);
+NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> edgeFaces;
+TopExp::MapShapesAndAncestors(solid, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
+BRepFilletAPI_MakeChamfer maker(solid);
+for (uint32_t eid : edgeIds) {
+    const TopoDS_Edge& edge = TopoDS::Edge(get(eid));
+    const int index = edgeFaces.FindIndex(edge);
+    if (index == 0 || edgeFaces.FindFromIndex(index).IsEmpty()) {
+        throw std::runtime_error(\"chamferTwoWithHistory: an edge has no face beside it\");
+    }
+    maker.Add(distance1, distance2, edge, TopoDS::Face(edgeFaces.FindFromIndex(index).First()));
+}
+maker.Build();
+if (!maker.IsDone()) {
+    throw std::runtime_error(\"chamferTwoWithHistory: operation failed\");
+}
+BatchScope result(*this, 1);
+uint32_t resultId = result.add(validateFilletResult(unwrapSingletonSolid(maker.Shape()), \"chamferTwoWithHistory\", false));
+EvolutionData evo = buildEvolution(maker, resultId, solid, inputFaceHashes, hashUpperBound);
+result.take();
+return evo;",
+        includes: &["BRepFilletAPI_MakeChamfer.hxx", "TopoDS.hxx", "TopExp.hxx", "NCollection_IndexedDataMap.hxx", "NCollection_List.hxx", "TopTools_ShapeMapHasher.hxx"],
+        category: "evolution",
+        return_type: ReturnType::EvolutionData,
+    },
+    MethodSpec {
         name: "shellWithHistory",
         kind: MethodKind::CustomBody,
         params: &[

@@ -375,6 +375,9 @@ class OcctKernel {
     EvolutionData chamferWithHistory(uint32_t solidId, std::vector<uint32_t> edgeIds,
                                      double distance, std::vector<int> inputFaceHashes,
                                      int hashUpperBound);
+    EvolutionData chamferTwoWithHistory(uint32_t solidId, std::vector<uint32_t> edgeIds,
+                                        double distance1, double distance2,
+                                        std::vector<int> inputFaceHashes, int hashUpperBound);
     EvolutionData defeatureWithHistory(uint32_t solidId, std::vector<uint32_t> faceIds,
                                        std::vector<int> inputFaceHashes, int hashUpperBound);
     EvolutionData tweakFacesWithHistory(uint32_t solidId, std::vector<uint32_t> faceIds,

@@ -222,6 +222,7 @@ pub(crate) struct GeneratedFuncs {
     fn_scale_with_history: TypedFunc<(u32, f64, f64, f64, f64, i32, i32, i32), i32>,
     fn_intersect_with_history: TypedFunc<(u32, u32, i32, i32, i32), i32>,
     fn_chamfer_with_history: TypedFunc<(u32, i32, i32, f64, i32, i32, i32), i32>,
+    fn_chamfer_two_with_history: TypedFunc<(u32, i32, i32, f64, f64, i32, i32, i32), i32>,
     fn_shell_with_history: TypedFunc<(u32, i32, i32, f64, f64, i32, i32, i32), i32>,
     fn_offset_with_history: TypedFunc<(u32, f64, f64, i32, i32, i32), i32>,
     fn_thicken_with_history: TypedFunc<(u32, f64, f64, i32, i32, i32), i32>,
@@ -479,6 +480,8 @@ impl GeneratedFuncs {
                 .get_typed_func(&mut store, "occt_intersect_with_history")?,
             fn_chamfer_with_history: instance
                 .get_typed_func(&mut store, "occt_chamfer_with_history")?,
+            fn_chamfer_two_with_history: instance
+                .get_typed_func(&mut store, "occt_chamfer_two_with_history")?,
             fn_shell_with_history: instance
                 .get_typed_func(&mut store, "occt_shell_with_history")?,
             fn_offset_with_history: instance
@@ -3968,6 +3971,52 @@ impl crate::kernel::OcctKernel {
         let status = status?;
         if status < 0 {
             return Err(self.read_last_error("chamfer_with_history"));
+        }
+        self.read_evolution_result()
+    }
+
+    pub fn chamfer_two_with_history(
+        &mut self,
+        solid_id: ShapeHandle,
+        edge_ids: &[ShapeHandle],
+        distance1: f64,
+        distance2: f64,
+        input_face_hashes: &[i32],
+        hash_upper_bound: i32,
+    ) -> OcctResult<EvolutionData> {
+        let edge_ids_bytes: Vec<u8> = edge_ids.iter().flat_map(|h| h.0.to_le_bytes()).collect();
+        let edge_ids_ptr = self.write_bytes(&edge_ids_bytes)?;
+        let edge_ids_len = edge_ids.len() as u32;
+        let input_face_hashes_bytes: Vec<u8> = input_face_hashes
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let input_face_hashes_ptr = match self.write_bytes(&input_face_hashes_bytes) {
+            Ok(ptr) => ptr,
+            Err(e) => {
+                let _ = self.free_bytes(edge_ids_ptr);
+                return Err(e);
+            }
+        };
+        let input_face_hashes_len = input_face_hashes.len() as u32;
+        let status = self.generated.fn_chamfer_two_with_history.call(
+            &mut self.store,
+            (
+                solid_id.0,
+                edge_ids_ptr as i32,
+                edge_ids_len as i32,
+                distance1,
+                distance2,
+                input_face_hashes_ptr as i32,
+                input_face_hashes_len as i32,
+                hash_upper_bound,
+            ),
+        );
+        self.free_bytes(edge_ids_ptr)?;
+        self.free_bytes(input_face_hashes_ptr)?;
+        let status = status?;
+        if status < 0 {
+            return Err(self.read_last_error("chamfer_two_with_history"));
         }
         self.read_evolution_result()
     }
