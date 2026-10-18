@@ -27,11 +27,17 @@
 #include <string>
 #include <vector>
 
-/// One face's move: a rigid motion, then an offset along the face's outward normal.
+/// One face's move: a rigid motion, then an offset along the face's outward normal. Or, `ruled`,
+/// the face is replaced by the surface ruled between two segments: `from` (where its far side
+/// stays) and `to` (where the edge that was turned now runs). That is how a flat face follows an
+/// edge turned so that the face can no longer stay flat: it twists, as in other direct modellers.
 struct BezierFaceMove {
     TopoDS_Shape face;
     gp_Trsf motion;
     double offset = 0.0;
+    bool ruled = false;
+    gp_Pnt from[2];
+    gp_Pnt to[2];
 };
 
 class BezierTweakModification : public BRepTools_Modification {

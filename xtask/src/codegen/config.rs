@@ -795,22 +795,33 @@ return store(maker.Shape());",
         occt_class: "",
         ctor_args: "",
         // Moves faces and lets the solid follow: each face's surface is carried by a rigid
-        // motion (row-major 3x4, twelve numbers per face) and then offset along its outward
+        // motion (row-major 3x4, twelve numbers per face; twenty-four to rule a face between
+        // two segments instead, see BezierFaceMove) and then offset along its outward
         // normal; edges and vertices are found again where the new surfaces meet
         // (facade/src/bezier_tweak.cpp). A result the full check rejects is refused rather than
         // repaired, since a repair would desync the history buildEvolution reads.
         setup_code: "\
 const auto& solid = get(solidId);
-if (motions.size() != faceIds.size() * 12 || offsets.size() != faceIds.size()) {
+// Twelve numbers per face, or twenty-four: then the second twelve are two segments (from, to)
+// the face is ruled between instead of moved, or NaN where the face moves as usual.
+const size_t per = faceIds.empty() ? 12 : motions.size() / faceIds.size();
+if ((per != 12 && per != 24) || motions.size() != faceIds.size() * per || offsets.size() != faceIds.size()) {
     throw std::runtime_error(\"tweakFacesWithHistory: one motion and one offset per face\");
 }
 std::vector<BezierFaceMove> moves;
 for (size_t i = 0; i < faceIds.size(); ++i) {
     BezierFaceMove move;
     move.face = get(faceIds[i]);
-    const double* m = &motions[i * 12];
+    const double* m = &motions[i * per];
     move.motion.SetValues(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]);
     move.offset = offsets[i];
+    if (per == 24 && !std::isnan(m[12])) {
+        move.ruled = true;
+        move.from[0] = gp_Pnt(m[12], m[13], m[14]);
+        move.from[1] = gp_Pnt(m[15], m[16], m[17]);
+        move.to[0] = gp_Pnt(m[18], m[19], m[20]);
+        move.to[1] = gp_Pnt(m[21], m[22], m[23]);
+    }
     moves.push_back(move);
 }
 std::unique_ptr<BezierTweak> made;
@@ -834,7 +845,7 @@ uint32_t resultId = result.add(shape);
 EvolutionData evo = buildEvolution(maker, resultId, solid, inputFaceHashes, hashUpperBound);
 result.take();
 return evo;",
-        includes: &["bezier_tweak.h", "TopoDS.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx"],
+        includes: &["bezier_tweak.h", "TopoDS.hxx", "TopExp_Explorer.hxx", "TopTools_ShapeMapHasher.hxx", "cmath"],
         category: "evolution",
         return_type: ReturnType::EvolutionData,
     },

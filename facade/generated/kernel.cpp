@@ -1063,16 +1063,26 @@ uint32_t OcctKernel::draftPrism(uint32_t shapeId, double dx, double dy, double d
 EvolutionData OcctKernel::tweakFacesWithHistory(uint32_t solidId, std::vector<uint32_t> faceIds, std::vector<double> motions, std::vector<double> offsets, std::vector<int> inputFaceHashes, int hashUpperBound) {
     try {
         const auto& solid = get(solidId);
-        if (motions.size() != faceIds.size() * 12 || offsets.size() != faceIds.size()) {
+        // Twelve numbers per face, or twenty-four: then the second twelve are two segments (from, to)
+        // the face is ruled between instead of moved, or NaN where the face moves as usual.
+        const size_t per = faceIds.empty() ? 12 : motions.size() / faceIds.size();
+        if ((per != 12 && per != 24) || motions.size() != faceIds.size() * per || offsets.size() != faceIds.size()) {
             throw std::runtime_error("tweakFacesWithHistory: one motion and one offset per face");
         }
         std::vector<BezierFaceMove> moves;
         for (size_t i = 0; i < faceIds.size(); ++i) {
             BezierFaceMove move;
             move.face = get(faceIds[i]);
-            const double* m = &motions[i * 12];
+            const double* m = &motions[i * per];
             move.motion.SetValues(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]);
             move.offset = offsets[i];
+            if (per == 24 && !std::isnan(m[12])) {
+                move.ruled = true;
+                move.from[0] = gp_Pnt(m[12], m[13], m[14]);
+                move.from[1] = gp_Pnt(m[15], m[16], m[17]);
+                move.to[0] = gp_Pnt(m[18], m[19], m[20]);
+                move.to[1] = gp_Pnt(m[21], m[22], m[23]);
+            }
             moves.push_back(move);
         }
         std::unique_ptr<BezierTweak> made;

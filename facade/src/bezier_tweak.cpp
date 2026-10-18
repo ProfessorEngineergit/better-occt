@@ -16,10 +16,13 @@
 #include <GeomAPI_ProjectPointOnCurve.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <GeomProjLib.hxx>
+#include <Geom_BSplineSurface.hxx>
 #include <Geom_BoundedCurve.hxx>
 #include <Geom_OffsetSurface.hxx>
 #include <Geom_RectangularTrimmedSurface.hxx>
 #include <Geom_TrimmedCurve.hxx>
+#include <NCollection_Array1.hxx>
+#include <NCollection_Array2.hxx>
 #include <Precision.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp.hxx>
@@ -103,6 +106,50 @@ bool liesOn(const occ::handle<Geom_Curve>& curve, double first, double last,
 }
 
 /// The nearest whole number of periods from `from` to `to`, in parameter units.
+/// The surface ruled between two segments, extended well past both of them so that the faces around
+/// it still meet it after the move, and running the way `like` runs at `near` so the face keeps its
+/// side. Bilinear: straight along both parameters, so extending it is exact.
+occ::handle<Geom_Surface> ruledBetween(const gp_Pnt from[2], const gp_Pnt to[2],
+                                       const occ::handle<Geom_Surface>& like, const gp_Pnt& near) {
+    const auto at = [&](double u, double v) {
+        const gp_XYZ a = from[0].XYZ() * (1.0 - u) + from[1].XYZ() * u;
+        const gp_XYZ b = to[0].XYZ() * (1.0 - u) + to[1].XYZ() * u;
+        return gp_Pnt(a * (1.0 - v) + b * v);
+    };
+    const double reach = 2.0;
+    NCollection_Array2<gp_Pnt> poles(1, 2, 1, 2);
+    poles.SetValue(1, 1, at(-reach, -reach));
+    poles.SetValue(2, 1, at(1.0 + reach, -reach));
+    poles.SetValue(1, 2, at(-reach, 1.0 + reach));
+    poles.SetValue(2, 2, at(1.0 + reach, 1.0 + reach));
+    NCollection_Array1<double> knots(1, 2);
+    knots.SetValue(1, 0.0);
+    knots.SetValue(2, 1.0);
+    NCollection_Array1<int> mults(1, 2);
+    mults.SetValue(1, 2);
+    mults.SetValue(2, 2);
+    occ::handle<Geom_BSplineSurface> surface =
+        new Geom_BSplineSurface(poles, knots, knots, mults, mults, 1, 1);
+    // The old surface's normal where the face was says which way the new one must face.
+    GeomAPI_ProjectPointOnSurf onOld(near, like);
+    GeomAPI_ProjectPointOnSurf onNew(near, surface);
+    if (onOld.NbPoints() > 0 && onNew.NbPoints() > 0) {
+        double u = 0.0;
+        double v = 0.0;
+        gp_Pnt p;
+        gp_Vec du;
+        gp_Vec dv;
+        onOld.LowerDistanceParameters(u, v);
+        like->D1(u, v, p, du, dv);
+        const gp_Vec was = du.Crossed(dv);
+        onNew.LowerDistanceParameters(u, v);
+        surface->D1(u, v, p, du, dv);
+        if (was.Dot(du.Crossed(dv)) < 0.0)
+            surface->UReverse();
+    }
+    return surface;
+}
+
 double periodsBetween(double from, double to, double period) {
     return std::round((to - from) / period) * period;
 }
@@ -137,6 +184,13 @@ void BezierTweakModification::prepare(const TopoDS_Shape& shape) {
         auto surface = unbounded(BRep_Tool::Surface(face));
         if (surface.IsNull())
             throw std::runtime_error("tweak: a face has no surface");
+        if (move.ruled) {
+            const gp_Pnt middle(
+                (move.from[0].XYZ() + move.from[1].XYZ() + move.to[0].XYZ() + move.to[1].XYZ()) /
+                4.0);
+            mySurfaces.Bind(move.face, ruledBetween(move.from, move.to, surface, middle));
+            continue;
+        }
         auto moved = occ::handle<Geom_Surface>::DownCast(surface->Transformed(move.motion));
         if (std::abs(move.offset) > Precision::Confusion()) {
             // Outward is the surface's normal, turned round where the face is reversed.
@@ -179,6 +233,7 @@ void BezierTweakModification::prepare(const TopoDS_Shape& shape) {
         const gp_Trsf& motion = myMoves[static_cast<size_t>(anyMove)].motion;
         // Every face it lies on moves together and keeps its size: the edge is simply carried.
         if (movedCount == faces.Extent() && commonMove >= 0 &&
+            !myMoves[static_cast<size_t>(commonMove)].ruled &&
             std::abs(myMoves[static_cast<size_t>(commonMove)].offset) <= Precision::Confusion()) {
             myCurves.Bind(edge, occ::handle<Geom_Curve>::DownCast(old->Transformed(motion)));
             continue;
@@ -267,6 +322,7 @@ void BezierTweakModification::prepare(const TopoDS_Shape& shape) {
             continue;
         const gp_Pnt old = BRep_Tool::Pnt(vertex);
         if (movedCount == faces.Extent() && commonMove >= 0 &&
+            !myMoves[static_cast<size_t>(commonMove)].ruled &&
             std::abs(myMoves[static_cast<size_t>(commonMove)].offset) <= Precision::Confusion()) {
             myPoints.Bind(vertex, old.Transformed(myMoves[static_cast<size_t>(commonMove)].motion));
             continue;
@@ -433,7 +489,8 @@ bool BezierTweakModification::carried(const TopoDS_Edge& edge) const {
             return false;
         move = m;
     }
-    if (move < 0 || std::abs(myMoves[static_cast<size_t>(move)].offset) > Precision::Confusion())
+    if (move < 0 || std::abs(myMoves[static_cast<size_t>(move)].offset) > Precision::Confusion() ||
+        myMoves[static_cast<size_t>(move)].ruled)
         return false;
     TopoDS_Vertex v1;
     TopoDS_Vertex v2;
