@@ -158,8 +158,8 @@ fn compile_facade(sh: &Shell, root: &Path) -> Result<Vec<PathBuf>> {
 
 /// OCCT static libraries not used by the facade — excluded from linking.
 const EXCLUDED_LIBS: &[&str] = &[
-    // IGES exchange (deliberately excluded — STEP is the modern standard, saves ~1-2 MB)
-    "libTKDEIGES.a",
+    // IGES exchange was excluded here to save ~1-2 MB; Bezier reads IGES files (importIges), which
+    // older CAD tools and many part libraries still hand out.
     // Persistence / serialization
     "libTKStd.a",
     "libTKStdL.a",

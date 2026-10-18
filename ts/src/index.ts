@@ -1342,6 +1342,14 @@ export class OcctKernel {
         });
     }
 
+    /** Read an IGES file into one shape (solids, surfaces or wires, as the file has them). */
+    importIges(data: string | ArrayBuffer): ShapeHandle {
+        return wrap("importIges", () => {
+            const str = typeof data === "string" ? data : new TextDecoder().decode(data);
+            return handle(this.#raw.importIges(str));
+        });
+    }
+
     exportStep(shape: ShapeHandle): string {
         return wrap("exportStep", () => this.#raw.exportStep(shape));
     }

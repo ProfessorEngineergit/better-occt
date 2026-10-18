@@ -297,6 +297,7 @@ EMSCRIPTEN_BINDINGS(occt_wasm) {
 
         // io
         .function("importStep", &OcctKernel::importStep)
+        .function("importIges", &OcctKernel::importIges)
         .function("exportStep", &OcctKernel::exportStep)
         .function("exportStl", &OcctKernel::exportStl)
         .function("importStl", &OcctKernel::importStl)
