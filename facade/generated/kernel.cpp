@@ -59,6 +59,7 @@
 #include <BRep_Tool.hxx>
 #include <BinTools.hxx>
 #include <Bnd_Box.hxx>
+#include <DE_ShapeFixParameters.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
 #include <GCPnts_TangentialDeflection.hxx>
 #include <GC_MakeArcOfCircle.hxx>
@@ -168,7 +169,9 @@
 #include <gp_Pnt2d.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
+#include <istream>
 #include <stdexcept>
+#include <streambuf>
 
 #include <algorithm>
 #include <cmath>
@@ -3733,20 +3736,36 @@ uint32_t OcctKernel::importStep(const std::string& data) {
     try {
         STEPControl_Reader reader;
         
-        // Write data to Emscripten's virtual filesystem
-        // STEPControl_Reader needs a file path — write to virtual FS
-        {
-            FILE* f = fopen("/tmp/import.step", "w");
-            if (!f) {
-                throw std::runtime_error("importStep: cannot create temp file");
+        // Read straight from the string: written to the virtual file system first, the text was
+        // copied once more into the heap and the file never removed (241 MB for a large assembly).
+        struct MemoryBuffer : std::streambuf {
+            MemoryBuffer(const char* begin, size_t size) {
+                char* start = const_cast<char*>(begin);
+                setg(start, start, start + size);
             }
-            fwrite(data.c_str(), 1, data.size(), f);
-            fclose(f);
-        }
+        };
+        MemoryBuffer buffer(data.data(), data.size());
+        std::istream stream(&buffer);
         
-        IFSelect_ReturnStatus status = reader.ReadFile("/tmp/import.step");
+        IFSelect_ReturnStatus status = reader.ReadStream("import.step", stream);
         if (status != IFSelect_RetDone) {
             throw std::runtime_error("importStep: failed to read STEP data");
+        }
+        
+        // Healing without the search for wires and edges that cross themselves. Set after reading,
+        // which resets the reader's parameters. That search was most of the healing: a Voron printer
+        // exported by Shapr3D read in 25 s where it took 75 s, and the full assembly's transfer went
+        // from 46 s to 37 s. Across the 80 STEP files of the 2026-10 audit every face count, triangle
+        // count and bounding box came out the same.
+        {
+            using Mode = DE_ShapeFixParameters::FixMode;
+            DE_ShapeFixParameters fix;
+            fix.FixSelfIntersectionMode = Mode::NotFix;
+            fix.FixIntersectingWiresMode = Mode::NotFix;
+            fix.FixSelfIntersectingEdgeMode = Mode::NotFix;
+            fix.FixIntersectingEdgesMode = Mode::NotFix;
+            fix.FixNonAdjacentIntersectingEdgesMode = Mode::NotFix;
+            reader.SetShapeFixParameters(fix);
         }
         
         reader.TransferRoots();
