@@ -15,6 +15,10 @@ Smaller bundles, branded types, arena-based memory, and modern tooling.
 
 </div>
 
+> **This is a fork of [andymai/occt-wasm](https://github.com/andymai/occt-wasm), built for [Bezier](https://github.com/ProfessorEngineergit/Bezier).**
+> Branch `bezier` adds a few things Bezier needs: ruling a tweaked face between two segments, a bevel with two legs (with history), reading IGES files, and reading STEP from memory with healing that skips the self-intersection search.
+> The `occt-wasm` file inside Bezier (`5.3.5-bezier`) is built from commit `eb4358b` of that branch. Publishing to npm and crates.io is switched off in this fork; for the library itself, use the upstream project.
+
 > **Looking for a higher-level CAD library?** [brepjs](https://github.com/andymai/brepjs) builds on occt-wasm with a friendlier API for parametric modeling, sketching, and production CAD applications. Use occt-wasm directly when you need full control over OCCT operations.
 
 ## Highlights
